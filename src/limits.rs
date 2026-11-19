@@ -14,8 +14,8 @@ const QUERY_TIMEOUT: Duration = Duration::from_secs(15);
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Window {
-    pub used_percent: f64,
-    pub window_duration_mins: Option<u32>,
+    used_percent: f64,
+    window_duration_mins: Option<u32>,
     pub resets_at: Option<i64>,
 }
 
@@ -23,12 +23,6 @@ impl Window {
     pub fn remaining(&self) -> f64 {
         (100.0 - self.used_percent).clamp(0.0, 100.0)
     }
-}
-
-#[derive(Default)]
-pub struct Limits {
-    pub five_hour: Option<Window>,
-    pub weekly: Option<Window>,
 }
 
 #[derive(Default, Deserialize)]
@@ -45,20 +39,15 @@ struct Response {
 }
 
 impl Response {
-    fn limits(self) -> Limits {
+    fn five_hour(self) -> Option<Window> {
         let bucket = self
             .rate_limits_by_limit_id
             .and_then(|mut buckets| buckets.remove("codex"))
             .unwrap_or(self.rate_limits);
-        let mut limits = Limits::default();
-        for window in [bucket.primary, bucket.secondary].into_iter().flatten() {
-            match window.window_duration_mins {
-                Some(300) => limits.five_hour = Some(window),
-                Some(10080) => limits.weekly = Some(window),
-                _ => {}
-            }
-        }
-        limits
+        [bucket.primary, bucket.secondary]
+            .into_iter()
+            .flatten()
+            .find(|window| window.window_duration_mins == Some(300))
     }
 }
 
@@ -166,7 +155,7 @@ fn receive(
     }
 }
 
-pub fn fetch() -> Result<Limits, String> {
+pub fn fetch() -> Result<Option<Window>, String> {
     let (mut server, output) = start().map_err(|error| match error.kind() {
         io::ErrorKind::NotFound => "Codex CLI not found. Install it or set CODEX_BIN.".into(),
         _ => format!("Couldn’t start Codex ({error})"),
@@ -199,7 +188,7 @@ pub fn fetch() -> Result<Limits, String> {
     .map_err(connection_error)?;
 
     serde_json::from_value::<Response>(receive(&mut output, 2, deadline)?)
-        .map(Response::limits)
+        .map(Response::five_hour)
         .map_err(|_| "Codex returned an unrecognized limits response".into())
 }
 
@@ -209,35 +198,36 @@ mod tests {
 
     #[test]
     fn uses_codex_bucket_and_matches_windows_by_duration() {
-        let limits = serde_json::from_value::<Response>(json!({
+        let window = serde_json::from_value::<Response>(json!({
             "rateLimits": {"primary": {"usedPercent": 77, "windowDurationMins": 300}},
             "rateLimitsByLimitId": {
                 "codex": {
                     "primary": {"usedPercent": 20, "windowDurationMins": 10080, "resetsAt": 123},
-                    "secondary": {"usedPercent": 10, "windowDurationMins": 300}
+                    "secondary": {"usedPercent": 10, "windowDurationMins": 300, "resetsAt": 456}
                 },
                 "codex_other": {"primary": {"usedPercent": 90, "windowDurationMins": 300}}
             }
         }))
         .unwrap()
-        .limits();
+        .five_hour()
+        .unwrap();
 
-        assert_eq!(limits.five_hour.unwrap().used_percent, 10.0);
-        assert_eq!(limits.weekly.unwrap().resets_at, Some(123));
+        assert_eq!(window.used_percent, 10.0);
+        assert_eq!(window.resets_at, Some(456));
     }
 
     #[test]
     fn supports_legacy_responses_with_missing_windows() {
-        let limits = serde_json::from_value::<Response>(json!({
+        let window = serde_json::from_value::<Response>(json!({
             "rateLimits": {
                 "primary": {"usedPercent": 30, "windowDurationMins": 300},
                 "secondary": null
             }
         }))
         .unwrap()
-        .limits();
+        .five_hour()
+        .unwrap();
 
-        assert_eq!(limits.five_hour.unwrap().used_percent, 30.0);
-        assert!(limits.weekly.is_none());
+        assert_eq!(window.used_percent, 30.0);
     }
 }

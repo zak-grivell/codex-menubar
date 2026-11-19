@@ -3,8 +3,8 @@ mod limits;
 
 use chrono::{DateTime, Local};
 use dispatch2::{DispatchQueue, DispatchTime};
-use icon::{Animation, Levels};
-use limits::{Limits, Window};
+use icon::Animation;
+use limits::Window;
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, rc::Retained, sel};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSCellImagePosition, NSMenu, NSMenuItem,
@@ -44,22 +44,23 @@ struct LimitRows {
 }
 
 impl LimitRows {
-    fn new(menu: &NSMenu, name: &str, mtm: MainThreadMarker) -> Self {
-        let label = info_item(menu, name, mtm);
+    fn new(menu: &NSMenu, mtm: MainThreadMarker) -> Self {
+        let label = info_item(menu, "5-hour limit · Loading…", mtm);
         let reset = info_item(menu, "—", mtm);
         reset.setIndentationLevel(1);
+        reset.setHidden(true);
         Self { label, reset }
     }
 
-    fn update(&self, name: &str, window: Option<&Window>) {
+    fn update(&self, window: Option<&Window>) {
         let Some(window) = window else {
             self.label
-                .setTitle(&NSString::from_str(&format!("{name} · Unavailable")));
+                .setTitle(&NSString::from_str("5-hour limit · Unavailable"));
             self.reset.setHidden(true);
             return;
         };
         self.label.setTitle(&NSString::from_str(&format!(
-            "{name} · {:.0}% left",
+            "5-hour limit · {:.0}% left",
             window.remaining()
         )));
         let reset = window
@@ -80,11 +81,10 @@ impl LimitRows {
 struct Menu {
     _status_item: Retained<NSStatusItem>,
     button: Option<Retained<NSStatusBarButton>>,
-    icon_levels: Cell<Levels>,
+    icon_level: Cell<Option<f64>>,
     animation_generation: Cell<u64>,
     _refresh_target: Retained<RefreshTarget>,
     five_hour: LimitRows,
-    weekly: LimitRows,
     updated: Retained<NSMenuItem>,
     error: Retained<NSMenuItem>,
 }
@@ -96,17 +96,12 @@ impl Menu {
         let button = status_item.button(mtm);
         if let Some(button) = &button {
             button.setImagePosition(NSCellImagePosition::ImageOnly);
-            button.setImage(Some(&icon::image([None, None])));
-            button.setToolTip(Some(&NSString::from_str(
-                "Codex Usage · 5-hour and weekly limits",
-            )));
+            button.setImage(Some(&icon::image(None)));
+            button.setToolTip(Some(&NSString::from_str("Codex Usage · 5-hour limit")));
         }
 
         let menu = NSMenu::new(mtm);
-        let five_hour = LimitRows::new(&menu, "5-hour limit · Loading…", mtm);
-        let weekly = LimitRows::new(&menu, "Weekly limit · Loading…", mtm);
-        five_hour.reset.setHidden(true);
-        weekly.reset.setHidden(true);
+        let five_hour = LimitRows::new(&menu, mtm);
         let updated = info_item(&menu, "", mtm);
         updated.setHidden(true);
         let error = info_item(&menu, "", mtm);
@@ -136,32 +131,20 @@ impl Menu {
         Self {
             _status_item: status_item,
             button,
-            icon_levels: Cell::new([None, None]),
+            icon_level: Cell::new(None),
             animation_generation: Cell::new(0),
             _refresh_target: refresh_target,
             five_hour,
-            weekly,
             updated,
             error,
         }
     }
 
-    fn update(&self, result: Result<Limits, String>) {
+    fn update(&self, result: Result<Option<Window>, String>) {
         match result {
-            Ok(limits) => {
-                self.update_icon([
-                    limits
-                        .five_hour
-                        .as_ref()
-                        .map(|window| window.remaining() / 100.0),
-                    limits
-                        .weekly
-                        .as_ref()
-                        .map(|window| window.remaining() / 100.0),
-                ]);
-                self.five_hour
-                    .update("5-hour limit", limits.five_hour.as_ref());
-                self.weekly.update("Weekly limit", limits.weekly.as_ref());
+            Ok(window) => {
+                self.update_icon(window.as_ref().map(|window| window.remaining() / 100.0));
+                self.five_hour.update(window.as_ref());
                 self.updated.setTitle(&NSString::from_str(&format!(
                     "Updated at {}",
                     Local::now().format("%H:%M")
@@ -172,8 +155,7 @@ impl Menu {
             Err(error) => {
                 eprintln!("Codex Menu Bar: {error}");
                 if self.updated.isHidden() {
-                    self.five_hour.update("5-hour limit", None);
-                    self.weekly.update("Weekly limit", None);
+                    self.five_hour.update(None);
                 }
                 self.error.setTitle(&NSString::from_str(&error));
                 self.error.setHidden(false);
@@ -181,14 +163,14 @@ impl Menu {
         }
     }
 
-    fn draw_icon(&self, levels: Levels) {
+    fn draw_icon(&self, level: Option<f64>) {
         if let Some(button) = &self.button {
-            button.setImage(Some(&icon::image(levels)));
-            self.icon_levels.set(levels);
+            button.setImage(Some(&icon::image(level)));
+            self.icon_level.set(level);
         }
     }
 
-    fn update_icon(&self, target: Levels) {
+    fn update_icon(&self, target: Option<f64>) {
         let generation = self.animation_generation.get().wrapping_add(1);
         self.animation_generation.set(generation);
         if self.button.is_none()
@@ -197,15 +179,19 @@ impl Menu {
             self.draw_icon(target);
             return;
         }
-        self.animation_frame(Animation::new(generation, self.icon_levels.get(), target));
+        let Some(target) = target else {
+            self.draw_icon(None);
+            return;
+        };
+        self.animation_frame(Animation::new(generation, self.icon_level.get(), target));
     }
 
     fn animation_frame(&self, animation: Animation) {
         if animation.generation != self.animation_generation.get() {
             return;
         }
-        let (levels, finished) = animation.frame(Instant::now());
-        self.draw_icon(levels);
+        let (level, finished) = animation.frame(Instant::now());
+        self.draw_icon(Some(level));
         if finished {
             return;
         }
@@ -221,7 +207,7 @@ impl Menu {
             })
             .is_err()
         {
-            self.draw_icon(animation.target);
+            self.draw_icon(Some(animation.target));
         }
     }
 }
