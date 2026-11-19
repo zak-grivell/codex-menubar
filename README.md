@@ -1,6 +1,6 @@
 # Codex Menu Bar
 
-A small native menu bar app for Codex usage on Apple silicon Macs. The menu bar shows the percentage remaining for your 5-hour and weekly limits. Click the gauge to see both reset times in your local time. It fetches on launch and every five minutes. The menu also has a manual refresh.
+A small native menu bar app for Codex usage on Apple silicon Macs. Two gauges show the remaining allowance at a glance. The left gauge tracks the 5-hour limit and the right gauge tracks the weekly limit. The gauges animate after each refresh and respect the macOS Reduce Motion setting. Click the icon to see exact percentages and reset times in your local time. The app refreshes on launch, every five minutes, and when you select Refresh.
 
 ## Run and install
 

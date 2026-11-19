@@ -19,6 +19,12 @@ pub struct Window {
     pub resets_at: Option<i64>,
 }
 
+impl Window {
+    pub fn remaining(&self) -> f64 {
+        (100.0 - self.used_percent).clamp(0.0, 100.0)
+    }
+}
+
 #[derive(Default)]
 pub struct Limits {
     pub five_hour: Option<Window>,
