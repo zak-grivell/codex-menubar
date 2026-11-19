@@ -4,7 +4,7 @@ mod limits;
 use chrono::{DateTime, Local};
 use dispatch2::{DispatchQueue, DispatchTime};
 use icon::Animation;
-use limits::Window;
+use limits::{Limits, Window};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, rc::Retained, sel};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSCellImagePosition, NSMenu, NSMenuItem,
@@ -39,28 +39,30 @@ define_class!(
 );
 
 struct LimitRows {
+    name: &'static str,
     label: Retained<NSMenuItem>,
     reset: Retained<NSMenuItem>,
 }
 
 impl LimitRows {
-    fn new(menu: &NSMenu, mtm: MainThreadMarker) -> Self {
-        let label = info_item(menu, "5-hour limit · Loading…", mtm);
+    fn new(menu: &NSMenu, name: &'static str, mtm: MainThreadMarker) -> Self {
+        let label = info_item(menu, &format!("{name} · Loading…"), mtm);
         let reset = info_item(menu, "—", mtm);
         reset.setIndentationLevel(1);
         reset.setHidden(true);
-        Self { label, reset }
+        Self { name, label, reset }
     }
 
     fn update(&self, window: Option<&Window>) {
+        let name = self.name;
         let Some(window) = window else {
             self.label
-                .setTitle(&NSString::from_str("5-hour limit · Unavailable"));
+                .setTitle(&NSString::from_str(&format!("{name} · Unavailable")));
             self.reset.setHidden(true);
             return;
         };
         self.label.setTitle(&NSString::from_str(&format!(
-            "5-hour limit · {:.0}% left",
+            "{name} · {:.0}% left",
             window.remaining()
         )));
         let reset = window
@@ -85,6 +87,7 @@ struct Menu {
     animation_generation: Cell<u64>,
     _refresh_target: Retained<RefreshTarget>,
     five_hour: LimitRows,
+    weekly: LimitRows,
     updated: Retained<NSMenuItem>,
     error: Retained<NSMenuItem>,
 }
@@ -101,7 +104,8 @@ impl Menu {
         }
 
         let menu = NSMenu::new(mtm);
-        let five_hour = LimitRows::new(&menu, mtm);
+        let five_hour = LimitRows::new(&menu, "5-hour limit", mtm);
+        let weekly = LimitRows::new(&menu, "Weekly limit", mtm);
         let updated = info_item(&menu, "", mtm);
         updated.setHidden(true);
         let error = info_item(&menu, "", mtm);
@@ -135,16 +139,23 @@ impl Menu {
             animation_generation: Cell::new(0),
             _refresh_target: refresh_target,
             five_hour,
+            weekly,
             updated,
             error,
         }
     }
 
-    fn update(&self, result: Result<Option<Window>, String>) {
+    fn update(&self, result: Result<Limits, String>) {
         match result {
-            Ok(window) => {
-                self.update_icon(window.as_ref().map(|window| window.remaining() / 100.0));
-                self.five_hour.update(window.as_ref());
+            Ok(limits) => {
+                self.update_icon(
+                    limits
+                        .five_hour
+                        .as_ref()
+                        .map(|window| window.remaining() / 100.0),
+                );
+                self.five_hour.update(limits.five_hour.as_ref());
+                self.weekly.update(limits.weekly.as_ref());
                 self.updated.setTitle(&NSString::from_str(&format!(
                     "Updated at {}",
                     Local::now().format("%H:%M")
@@ -156,6 +167,7 @@ impl Menu {
                 eprintln!("Codex Menu Bar: {error}");
                 if self.updated.isHidden() {
                     self.five_hour.update(None);
+                    self.weekly.update(None);
                 }
                 self.error.setTitle(&NSString::from_str(&error));
                 self.error.setHidden(false);

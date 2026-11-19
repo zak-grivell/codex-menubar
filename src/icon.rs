@@ -47,18 +47,19 @@ pub fn image(remaining: Option<f64>) -> Retained<NSImage> {
         objc2::runtime::Bool::YES
     });
     let image =
-        NSImage::imageWithSize_flipped_drawingHandler(NSSize::new(16.0, 16.0), false, &draw);
+        NSImage::imageWithSize_flipped_drawingHandler(NSSize::new(20.0, 20.0), false, &draw);
     image.setTemplate(true);
     image.setAccessibilityDescription(Some(&NSString::from_str("Codex five-hour usage")));
     image
 }
 
 fn draw_gauge(remaining: Option<f64>) {
-    const X: f64 = 8.0;
-    const Y: f64 = 8.0;
-    const RADIUS: f64 = 5.25;
+    const X: f64 = 10.0;
+    const Y: f64 = 10.0;
+    const RADIUS: f64 = 8.0;
+    const LINE_WIDTH: f64 = 1.8;
     let track = oval(X, Y, RADIUS);
-    track.setLineWidth(1.6);
+    track.setLineWidth(LINE_WIDTH);
     NSColor::colorWithWhite_alpha(0.0, 0.32).setStroke();
     track.stroke();
 
@@ -70,7 +71,7 @@ fn draw_gauge(remaining: Option<f64>) {
         track.stroke();
     } else if remaining > 0.0 {
         let arc = NSBezierPath::bezierPath();
-        arc.setLineWidth(1.6);
+        arc.setLineWidth(LINE_WIDTH);
         arc.setLineCapStyle(NSLineCapStyle::Round);
         arc.appendBezierPathWithArcWithCenter_radius_startAngle_endAngle_clockwise(
             NSPoint::new(X, Y),
@@ -82,7 +83,7 @@ fn draw_gauge(remaining: Option<f64>) {
         arc.stroke();
     }
     NSColor::colorWithWhite_alpha(0.0, 0.74).setFill();
-    oval(X, Y, 0.83).fill();
+    oval(X, Y, 1.1).fill();
 }
 
 fn oval(x: f64, y: f64, radius: f64) -> Retained<NSBezierPath> {
