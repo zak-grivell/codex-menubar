@@ -5,8 +5,8 @@ use dispatch2::DispatchQueue;
 use limits::{Limits, Window};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, rc::Retained, sel};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSImage, NSMenu, NSMenuItem, NSStatusBar,
-    NSStatusItem, NSVariableStatusItemLength,
+    NSApplication, NSApplicationActivationPolicy, NSCellImagePosition, NSImage, NSMenu, NSMenuItem,
+    NSStatusBar, NSStatusBarButton, NSStatusItem, NSVariableStatusItemLength,
 };
 use objc2_foundation::{NSObject, NSString};
 use std::{
@@ -49,16 +49,16 @@ impl LimitRows {
         Self { label, reset }
     }
 
-    fn update(&self, name: &str, window: Option<Window>) {
+    fn update(&self, name: &str, window: Option<&Window>) {
         let Some(window) = window else {
             self.label
                 .setTitle(&NSString::from_str(&format!("{name} · Unavailable")));
             self.reset.setHidden(true);
             return;
         };
-        let remaining = (100.0 - window.used_percent).clamp(0.0, 100.0);
         self.label.setTitle(&NSString::from_str(&format!(
-            "{name} · {remaining:.0}% left"
+            "{name} · {} left",
+            remaining_percent(window)
         )));
         let reset = window
             .resets_at
@@ -75,8 +75,14 @@ impl LimitRows {
     }
 }
 
+fn remaining_percent(window: &Window) -> String {
+    let remaining = (100.0 - window.used_percent).clamp(0.0, 100.0);
+    format!("{remaining:.0}%")
+}
+
 struct Menu {
     _status_item: Retained<NSStatusItem>,
+    button: Option<Retained<NSStatusBarButton>>,
     _refresh_target: Retained<RefreshTarget>,
     five_hour: LimitRows,
     weekly: LimitRows,
@@ -88,7 +94,8 @@ impl Menu {
     fn new(app: &NSApplication, requests: SyncSender<()>, mtm: MainThreadMarker) -> Self {
         let status_item =
             NSStatusBar::systemStatusBar().statusItemWithLength(NSVariableStatusItemLength);
-        if let Some(button) = status_item.button(mtm) {
+        let button = status_item.button(mtm);
+        if let Some(button) = &button {
             let title = NSString::from_str("Codex Usage");
             let image = NSImage::imageWithSystemSymbolName_accessibilityDescription(
                 &NSString::from_str("gauge.with.dots.needle.50percent"),
@@ -97,9 +104,9 @@ impl Menu {
             if let Some(image) = image {
                 image.setTemplate(true);
                 button.setImage(Some(&image));
-            } else {
-                button.setTitle(&NSString::from_str("Codex"));
+                button.setImagePosition(NSCellImagePosition::ImageLeading);
             }
+            button.setTitle(&NSString::from_str("Codex…"));
             button.setToolTip(Some(&title));
         }
 
@@ -136,6 +143,7 @@ impl Menu {
 
         Self {
             _status_item: status_item,
+            button,
             _refresh_target: refresh_target,
             five_hour,
             weekly,
@@ -147,8 +155,10 @@ impl Menu {
     fn update(&self, result: Result<Limits, String>) {
         match result {
             Ok(limits) => {
-                self.five_hour.update("5-hour limit", limits.five_hour);
-                self.weekly.update("Weekly limit", limits.weekly);
+                self.set_summary(&limits);
+                self.five_hour
+                    .update("5-hour limit", limits.five_hour.as_ref());
+                self.weekly.update("Weekly limit", limits.weekly.as_ref());
                 self.updated.setTitle(&NSString::from_str(&format!(
                     "Updated at {}",
                     Local::now().format("%H:%M")
@@ -157,13 +167,31 @@ impl Menu {
                 self.error.setHidden(true);
             }
             Err(error) => {
+                eprintln!("Codex Menu Bar: {error}");
                 if self.updated.isHidden() {
+                    self.set_summary(&Limits::default());
                     self.five_hour.update("5-hour limit", None);
                     self.weekly.update("Weekly limit", None);
                 }
                 self.error.setTitle(&NSString::from_str(&error));
                 self.error.setHidden(false);
             }
+        }
+    }
+
+    fn set_summary(&self, limits: &Limits) {
+        if let Some(button) = &self.button {
+            let five_hour = limits
+                .five_hour
+                .as_ref()
+                .map_or_else(|| "—".into(), remaining_percent);
+            let weekly = limits
+                .weekly
+                .as_ref()
+                .map_or_else(|| "—".into(), remaining_percent);
+            button.setTitle(&NSString::from_str(&format!(
+                "5h {five_hour} · 7d {weekly}"
+            )));
         }
     }
 }
