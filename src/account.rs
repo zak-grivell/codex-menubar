@@ -1,11 +1,13 @@
-use serde::Deserialize;
+use crate::token_usage::{TokenTotals, TokenUsage};
+use chrono::Utc;
+use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use std::{
     env,
     io::{self, BufRead, BufReader, Write},
     os::{fd::OwnedFd, unix::net::UnixStream},
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Child, ChildStdin, Command, Stdio},
     time::{Duration, Instant},
 };
 
@@ -126,6 +128,7 @@ fn receive(
     output: &mut BufReader<UnixStream>,
     id: u64,
     deadline: Instant,
+    rejected: &str,
 ) -> Result<Value, String> {
     let mut line = String::new();
     loop {
@@ -159,27 +162,33 @@ fn receive(
         if let Some(result) = message.get_mut("result") {
             return Ok(result.take());
         }
-        return Err(match id {
-            1 => "Couldn’t initialize the Codex app server".into(),
-            _ => "Codex couldn’t read your limits. Check your Codex CLI sign-in.".into(),
-        });
+        return Err(rejected.into());
     }
 }
 
-pub fn fetch() -> Result<Limits, String> {
-    let (mut server, output) = start().map_err(|error| match error.kind() {
-        io::ErrorKind::NotFound => "Codex CLI not found. Install it or set CODEX_BIN.".into(),
-        _ => format!("Couldn’t start Codex ({error})"),
-    })?;
-    let mut output = BufReader::new(output);
-    let Some(mut input) = server.0.stdin.take() else {
-        return Err("Couldn’t open the Codex app server connection".into());
-    };
-    let deadline = Instant::now() + QUERY_TIMEOUT;
-    let connection_error = |error| format!("Couldn’t write to Codex ({error})");
-    send(
-        &mut input,
-        json!({
+pub struct AccountClient {
+    input: ChildStdin,
+    output: BufReader<UnixStream>,
+    _server: Server,
+}
+
+impl AccountClient {
+    pub fn connect() -> Result<Self, String> {
+        let (mut server, output) = start().map_err(|error| match error.kind() {
+            io::ErrorKind::NotFound => "Codex CLI not found. Install it or set CODEX_BIN.".into(),
+            _ => format!("Couldn’t start Codex ({error})"),
+        })?;
+        let input = server
+            .0
+            .stdin
+            .take()
+            .ok_or("Couldn’t open the Codex app server connection")?;
+        let mut client = Self {
+            input,
+            output: BufReader::new(output),
+            _server: server,
+        };
+        client.send(json!({
             "id": 1,
             "method": "initialize",
             "params": {"clientInfo": {
@@ -187,20 +196,55 @@ pub fn fetch() -> Result<Limits, String> {
                 "title": "Codex Menu Bar",
                 "version": env!("CARGO_PKG_VERSION")
             }}
-        }),
-    )
-    .map_err(connection_error)?;
-    receive(&mut output, 1, deadline)?;
-    send(&mut input, json!({"method": "initialized"})).map_err(connection_error)?;
-    send(
-        &mut input,
-        json!({"id": 2, "method": "account/rateLimits/read"}),
-    )
-    .map_err(connection_error)?;
+        }))?;
+        receive(
+            &mut client.output,
+            1,
+            Instant::now() + QUERY_TIMEOUT,
+            "Couldn’t initialize the Codex app server",
+        )?;
+        client.send(json!({"method": "initialized"}))?;
+        Ok(client)
+    }
 
-    serde_json::from_value::<Response>(receive(&mut output, 2, deadline)?)
+    fn send(&mut self, message: Value) -> Result<(), String> {
+        send(&mut self.input, message).map_err(|error| format!("Couldn’t write to Codex ({error})"))
+    }
+
+    fn request<T: DeserializeOwned>(
+        &mut self,
+        id: u64,
+        method: &str,
+        rejected: &str,
+    ) -> Result<T, String> {
+        self.send(json!({"id": id, "method": method}))?;
+        let response = receive(
+            &mut self.output,
+            id,
+            Instant::now() + QUERY_TIMEOUT,
+            rejected,
+        )?;
+        serde_json::from_value(response)
+            .map_err(|_| format!("Codex returned an invalid response for {method}"))
+    }
+
+    pub fn limits(&mut self) -> Result<Limits, String> {
+        self.request::<Response>(
+            2,
+            "account/rateLimits/read",
+            "Codex couldn’t read your limits. Check your Codex CLI sign-in.",
+        )
         .map(Response::limits)
-        .map_err(|_| "Codex returned an unrecognized limits response".into())
+    }
+
+    pub fn token_totals(&mut self) -> Result<TokenTotals, String> {
+        self.request::<TokenUsage>(
+            3,
+            "account/usage/read",
+            "Codex couldn’t read token activity",
+        )?
+        .totals(Utc::now().date_naive())
+    }
 }
 
 #[cfg(test)]

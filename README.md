@@ -2,6 +2,8 @@
 
 A small native menu bar app for Codex usage on Apple silicon Macs. A single ring shows how much of your 5-hour limit remains. It animates after each refresh and respects the macOS Reduce Motion setting. Click the ring to see exact percentages and local reset times for both the 5-hour and weekly limits. The app refreshes on launch, every five minutes, and when you select Refresh.
 
+The dropdown also shows reported account token totals for today, this week, and this month. Totals use UTC calendar dates, and weeks start on Monday. Recent activity may take time to appear in the account data.
+
 ## Run and install
 
 Use a recent [Codex CLI](https://learn.chatgpt.com/docs/cli) signed in to your ChatGPT account. If needed, run `codex login` first.
@@ -30,7 +32,7 @@ The app checks `PATH` and common Homebrew, Nix, and user bin directories for `co
 CODEX_BIN=/absolute/path/to/codex nix run github:zak-grivell/codex-menubar
 ```
 
-The app uses the CLI's [Codex app-server](https://learn.chatgpt.com/docs/app-server) and existing sign-in. Each refresh starts a short-lived CLI process in a background thread. If a refresh fails, the menu keeps the last successful reading and displays the error.
+The app uses the CLI's [Codex app-server](https://learn.chatgpt.com/docs/app-server) and existing sign-in. Each refresh starts a short-lived CLI process in a background thread. If a limits request fails, the menu keeps its last successful limit readings and displays the error.
 
 ## nix-darwin
 

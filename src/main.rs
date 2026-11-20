@@ -1,10 +1,11 @@
+mod account;
 mod icon;
-mod limits;
+mod token_usage;
 
+use account::{AccountClient, Limits, Window};
 use chrono::{DateTime, Local};
 use dispatch2::{DispatchQueue, DispatchTime};
 use icon::Animation;
-use limits::{Limits, Window};
 use objc2::{DefinedClass, MainThreadMarker, MainThreadOnly, define_class, rc::Retained, sel};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSCellImagePosition, NSMenu, NSMenuItem,
@@ -17,6 +18,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use token_usage::TokenTotals;
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(300);
 
@@ -90,6 +92,7 @@ struct Menu {
     weekly: LimitRows,
     updated: Retained<NSMenuItem>,
     error: Retained<NSMenuItem>,
+    token_rows: [Retained<NSMenuItem>; 3],
 }
 
 impl Menu {
@@ -110,6 +113,18 @@ impl Menu {
         updated.setHidden(true);
         let error = info_item(&menu, "", mtm);
         error.setHidden(true);
+        menu.addItem(&NSMenuItem::separatorItem(mtm));
+        info_item(&menu, "Token usage (UTC)", mtm);
+        let token_rows = [
+            info_item(&menu, "Loading token totals…", mtm),
+            info_item(&menu, "", mtm),
+            info_item(&menu, "", mtm),
+        ];
+        for row in &token_rows {
+            row.setIndentationLevel(1);
+        }
+        token_rows[1].setHidden(true);
+        token_rows[2].setHidden(true);
         menu.addItem(&NSMenuItem::separatorItem(mtm));
 
         let refresh_target: Retained<RefreshTarget> =
@@ -142,10 +157,11 @@ impl Menu {
             weekly,
             updated,
             error,
+            token_rows,
         }
     }
 
-    fn update(&self, result: Result<Limits, String>) {
+    fn update_limits(&self, result: Result<Limits, String>) {
         match result {
             Ok(limits) => {
                 self.update_icon(
@@ -171,6 +187,31 @@ impl Menu {
                 }
                 self.error.setTitle(&NSString::from_str(&error));
                 self.error.setHidden(false);
+            }
+        }
+    }
+
+    fn update_tokens(&self, result: Result<TokenTotals, String>) {
+        match result {
+            Ok(totals) => {
+                let periods = [
+                    ("Today", totals.today),
+                    ("This week", totals.week),
+                    ("This month", totals.month),
+                ];
+                for (row, (period, count)) in self.token_rows.iter().zip(periods) {
+                    row.setTitle(&NSString::from_str(&format!(
+                        "{period} · {} tokens",
+                        grouped_count(count)
+                    )));
+                    row.setHidden(false);
+                }
+            }
+            Err(error) => {
+                eprintln!("Codex Menu Bar: {error}");
+                self.token_rows[0].setTitle(&NSString::from_str("Token totals unavailable"));
+                self.token_rows[1].setHidden(true);
+                self.token_rows[2].setHidden(true);
             }
         }
     }
@@ -232,16 +273,42 @@ fn info_item(menu: &NSMenu, title: &str, mtm: MainThreadMarker) -> Retained<NSMe
     item
 }
 
+fn grouped_count(count: u128) -> String {
+    let digits = count.to_string();
+    let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            formatted.push(',');
+        }
+        formatted.push(digit);
+    }
+    formatted
+}
+
+fn update_menu(update: impl FnOnce(&Menu) + Send + 'static) {
+    DispatchQueue::main().exec_async(move || {
+        MENU.with(|menu| {
+            if let Some(menu) = menu.get() {
+                update(menu);
+            }
+        });
+    });
+}
+
 fn refresh_loop(requests: Receiver<()>) {
     loop {
-        let result = limits::fetch();
-        DispatchQueue::main().exec_async(move || {
-            MENU.with(|menu| {
-                if let Some(menu) = menu.get() {
-                    menu.update(result);
-                }
-            });
-        });
+        match AccountClient::connect() {
+            Ok(mut account) => {
+                let limits = account.limits();
+                update_menu(move |menu| menu.update_limits(limits));
+                let tokens = account.token_totals();
+                update_menu(move |menu| menu.update_tokens(tokens));
+            }
+            Err(error) => update_menu(move |menu| {
+                menu.update_limits(Err(error.clone()));
+                menu.update_tokens(Err(error));
+            }),
+        }
         match requests.recv_timeout(REFRESH_INTERVAL) {
             Ok(()) | Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return,
