@@ -18,7 +18,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use token_usage::TokenTotals;
+use token_usage::{TokenTotals, format_count};
 
 const REFRESH_INTERVAL: Duration = Duration::from_secs(300);
 
@@ -202,7 +202,7 @@ impl Menu {
                 for (row, (period, count)) in self.token_rows.iter().zip(periods) {
                     row.setTitle(&NSString::from_str(&format!(
                         "{period} · {} tokens",
-                        grouped_count(count)
+                        format_count(count)
                     )));
                     row.setHidden(false);
                 }
@@ -271,18 +271,6 @@ fn info_item(menu: &NSMenu, title: &str, mtm: MainThreadMarker) -> Retained<NSMe
     item.setEnabled(false);
     menu.addItem(&item);
     item
-}
-
-fn grouped_count(count: u128) -> String {
-    let digits = count.to_string();
-    let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
-    for (index, digit) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index).is_multiple_of(3) {
-            formatted.push(',');
-        }
-        formatted.push(digit);
-    }
-    formatted
 }
 
 fn update_menu(update: impl FnOnce(&Menu) + Send + 'static) {

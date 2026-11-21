@@ -50,10 +50,67 @@ impl TokenUsage {
     }
 }
 
+pub fn format_count(count: u128) -> String {
+    if count < 1_000 {
+        return count.to_string();
+    }
+
+    const UNITS: [&str; 12] = [
+        "thousand",
+        "million",
+        "billion",
+        "trillion",
+        "quadrillion",
+        "quintillion",
+        "sextillion",
+        "septillion",
+        "octillion",
+        "nonillion",
+        "decillion",
+        "undecillion",
+    ];
+
+    let mut exponent = count.ilog10();
+    let divisor = 10_u128.pow(exponent - 2);
+    let mut significant = count / divisor + u128::from(count % divisor >= divisor / 2);
+    if significant == 1_000 {
+        significant = 100;
+        exponent += 1;
+    }
+
+    let unit = UNITS[(exponent / 3 - 1) as usize];
+    match exponent % 3 {
+        0 => format!("{}.{:02} {unit}", significant / 100, significant % 100),
+        1 => format!("{}.{} {unit}", significant / 10, significant % 10),
+        _ => format!("{significant} {unit}"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn formats_three_significant_figures_across_unit_boundaries() {
+        for (count, expected) in [
+            (0, "0"),
+            (27, "27"),
+            (999, "999"),
+            (1_000, "1.00 thousand"),
+            (12_345, "12.3 thousand"),
+            (999_499, "999 thousand"),
+            (999_500, "1.00 million"),
+            (1_995_000, "2.00 million"),
+            (9_995_000, "10.0 million"),
+            (123_456_789, "123 million"),
+            (1_234_567_890, "1.23 billion"),
+            (999_500_000_000, "1.00 trillion"),
+            (u128::MAX, "340 undecillion"),
+        ] {
+            assert_eq!(format_count(count), expected);
+        }
+    }
 
     #[test]
     fn groups_sparse_daily_buckets_by_week_and_month_boundaries() {
