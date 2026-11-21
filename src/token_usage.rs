@@ -3,6 +3,12 @@ use serde::Deserialize;
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct TokenTotals {
+    pub calendar: Option<CalendarTotals>,
+    pub all_time: Option<u128>,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct CalendarTotals {
     pub today: u128,
     pub week: u128,
     pub month: u128,
@@ -11,7 +17,14 @@ pub struct TokenTotals {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TokenUsage {
+    summary: Option<TokenSummary>,
     daily_usage_buckets: Option<Vec<DailyBucket>>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TokenSummary {
+    lifetime_tokens: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -23,12 +36,19 @@ struct DailyBucket {
 
 impl TokenUsage {
     pub fn totals(self, today: NaiveDate) -> Result<TokenTotals, String> {
-        let buckets = self
-            .daily_usage_buckets
-            .ok_or("Codex did not return daily token activity")?;
+        let all_time = self
+            .summary
+            .and_then(|summary| summary.lifetime_tokens)
+            .map(u128::from);
+        let Some(buckets) = self.daily_usage_buckets else {
+            return Ok(TokenTotals {
+                calendar: None,
+                all_time,
+            });
+        };
         let week_start = today - Days::new(today.weekday().num_days_from_monday().into());
         let month_start = today.with_day(1).expect("valid first day of the month");
-        let mut totals = TokenTotals::default();
+        let mut totals = CalendarTotals::default();
         for bucket in buckets {
             let day = NaiveDate::parse_from_str(&bucket.start_date, "%Y-%m-%d")
                 .map_err(|_| "Codex returned an invalid token activity date")?;
@@ -46,7 +66,10 @@ impl TokenUsage {
                 totals.month += tokens;
             }
         }
-        Ok(totals)
+        Ok(TokenTotals {
+            calendar: Some(totals),
+            all_time,
+        })
     }
 }
 
@@ -125,10 +148,12 @@ mod tests {
                 .unwrap()
                 .totals(NaiveDate::from_ymd_opt(2026, 11, day).unwrap())
                 .unwrap()
+                .calendar
+                .unwrap()
         };
         assert_eq!(
             totals(1),
-            TokenTotals {
+            CalendarTotals {
                 today: 300,
                 week: 500,
                 month: 300
@@ -136,7 +161,7 @@ mod tests {
         );
         assert_eq!(
             totals(2),
-            TokenTotals {
+            CalendarTotals {
                 today: 0,
                 week: 0,
                 month: 300
@@ -144,7 +169,7 @@ mod tests {
         );
         assert_eq!(
             totals(3),
-            TokenTotals {
+            CalendarTotals {
                 today: 400,
                 week: 400,
                 month: 700
@@ -155,10 +180,29 @@ mod tests {
     #[test]
     fn distinguishes_unavailable_activity_from_an_empty_history() {
         let today = NaiveDate::from_ymd_opt(2026, 11, 1).unwrap();
-        let unavailable: TokenUsage =
-            serde_json::from_value(json!({"dailyUsageBuckets": null})).unwrap();
-        let empty: TokenUsage = serde_json::from_value(json!({"dailyUsageBuckets": []})).unwrap();
-        assert!(unavailable.totals(today).is_err());
-        assert_eq!(empty.totals(today).unwrap(), TokenTotals::default());
+        let lifetime_only: TokenUsage = serde_json::from_value(json!({
+            "summary": {"lifetimeTokens": 12_345_678_900_u64},
+            "dailyUsageBuckets": null,
+        }))
+        .unwrap();
+        let empty: TokenUsage = serde_json::from_value(json!({
+            "summary": {"lifetimeTokens": null},
+            "dailyUsageBuckets": [],
+        }))
+        .unwrap();
+        assert_eq!(
+            lifetime_only.totals(today).unwrap(),
+            TokenTotals {
+                calendar: None,
+                all_time: Some(12_345_678_900),
+            }
+        );
+        assert_eq!(
+            empty.totals(today).unwrap(),
+            TokenTotals {
+                calendar: Some(CalendarTotals::default()),
+                all_time: None,
+            }
+        );
     }
 }

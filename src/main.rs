@@ -92,7 +92,7 @@ struct Menu {
     weekly: LimitRows,
     updated: Retained<NSMenuItem>,
     error: Retained<NSMenuItem>,
-    token_rows: [Retained<NSMenuItem>; 3],
+    token_rows: [Retained<NSMenuItem>; 4],
 }
 
 impl Menu {
@@ -119,12 +119,14 @@ impl Menu {
             info_item(&menu, "Loading token totals…", mtm),
             info_item(&menu, "", mtm),
             info_item(&menu, "", mtm),
+            info_item(&menu, "", mtm),
         ];
         for row in &token_rows {
             row.setIndentationLevel(1);
         }
-        token_rows[1].setHidden(true);
-        token_rows[2].setHidden(true);
+        for row in &token_rows[1..] {
+            row.setHidden(true);
+        }
         menu.addItem(&NSMenuItem::separatorItem(mtm));
 
         let refresh_target: Retained<RefreshTarget> =
@@ -194,24 +196,27 @@ impl Menu {
     fn update_tokens(&self, result: Result<TokenTotals, String>) {
         match result {
             Ok(totals) => {
+                let calendar = totals.calendar.as_ref();
                 let periods = [
-                    ("Today", totals.today),
-                    ("This week", totals.week),
-                    ("This month", totals.month),
+                    ("Today", calendar.map(|t| t.today)),
+                    ("This week", calendar.map(|t| t.week)),
+                    ("This month", calendar.map(|t| t.month)),
+                    ("All time", totals.all_time),
                 ];
                 for (row, (period, count)) in self.token_rows.iter().zip(periods) {
-                    row.setTitle(&NSString::from_str(&format!(
-                        "{period} · {} tokens",
-                        format_count(count)
-                    )));
+                    let value = count
+                        .map(|count| format!("{} tokens", format_count(count)))
+                        .unwrap_or_else(|| "Unavailable".into());
+                    row.setTitle(&NSString::from_str(&format!("{period} · {value}")));
                     row.setHidden(false);
                 }
             }
             Err(error) => {
                 eprintln!("Codex Menu Bar: {error}");
                 self.token_rows[0].setTitle(&NSString::from_str("Token totals unavailable"));
-                self.token_rows[1].setHidden(true);
-                self.token_rows[2].setHidden(true);
+                for row in &self.token_rows[1..] {
+                    row.setHidden(true);
+                }
             }
         }
     }

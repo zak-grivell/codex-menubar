@@ -2,7 +2,7 @@
 
 A small native menu bar app for Codex usage on Apple silicon Macs. A single ring shows how much of your 5-hour limit remains. It animates after each refresh and respects the macOS Reduce Motion setting. Click the ring to see exact percentages and local reset times for both the 5-hour and weekly limits. The app refreshes on launch, every five minutes, and when you select Refresh.
 
-The dropdown also shows reported account token totals for today, this week, and this month. Totals of 1,000 or more are rounded to three significant figures with units such as million or billion. Totals use UTC calendar dates, and weeks start on Monday. Recent activity may take time to appear in the account data.
+The dropdown also shows reported account token totals for today, this week, this month, and all time. Totals of 1,000 or more are rounded to three significant figures with units such as million or billion. Calendar totals use UTC dates, and weeks start on Monday. Recent activity may take time to appear in the account data.
 
 ## Run and install
 
